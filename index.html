@@ -83,6 +83,9 @@
                 <button onclick="window.print()" class="bg-gray-700 hover:bg-gray-800 text-white px-3 py-1.5 rounded text-sm transition shadow-sm">
                     <i class="fa-solid fa-print mr-2"></i>인쇄
                 </button>
+                <button onclick="toggleMapFullscreen()" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded text-sm transition shadow-sm">
+                    <i class="fa-solid fa-expand mr-2"></i>전체화면
+                </button>
                 <span id="statusMsg" class="text-xs text-gray-500 ml-2">준비됨</span>
             </div>
         </div>
@@ -94,12 +97,20 @@
     <!-- 메인 컨텐츠 -->
     <main class="flex flex-1 overflow-hidden">
         <!-- 좌측: 지도 -->
-        <div id="map-container" class="w-[65%] h-full relative bg-gray-100 border-r">
+        <div id="map-container" class="h-full relative bg-gray-100 border-r" style="width: 65%;">
             <div id="map"></div>
+            <button id="exitFullscreenBtn" onclick="toggleMapFullscreen()" class="hidden absolute top-4 right-4 z-[9999] bg-white hover:bg-gray-100 text-gray-800 px-4 py-2 rounded shadow-lg border text-sm font-bold transition">
+                <i class="fa-solid fa-compress mr-2"></i>원래대로
+            </button>
+        </div>
+
+        <!-- 리사이저 (경계선 조절) -->
+        <div id="layout-resizer" class="w-1.5 bg-gray-300 hover:bg-blue-500 cursor-col-resize z-40 flex-shrink-0 relative no-print transition-colors group" title="드래그하여 크기 조절">
+            <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 h-8 w-0.5 bg-gray-500 group-hover:bg-white rounded"></div>
         </div>
 
         <!-- 우측: 패널 -->
-        <div id="rightPanel" class="w-[35%] flex flex-col bg-white h-full shadow-xl z-30">
+        <div id="rightPanel" class="flex-1 flex flex-col bg-white h-full shadow-xl z-30 min-w-[300px]">
             <div id="printTitle">구역 현황 명단</div>
 
             <!-- 1. 상단: 통계 -->
@@ -218,7 +229,7 @@
         </div>
     </div>
 
-    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=1d9268593ca620c81ee6929f1f2de6a3&libraries=services"></script>
+    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=1d9268593ca620c81ee6929f1f2de6a3&libraries=services&autoload=false"></script>
 
     <script>
         // --- [신규] 보안 기능: 우클릭 차단 및 개발자 도구 방지 ---
@@ -261,16 +272,26 @@
 
         window.onload = function() {
             initTableResizer();
-            if (!window.kakao || !window.kakao.maps) {
-                alert("API 키를 확인해주세요.");
-                return;
-            }
-            kakao.maps.load(function() {
-                const container = document.getElementById('map');
-                const options = { center: new kakao.maps.LatLng(37.566826, 126.9786567), level: 7 };
-                map = new kakao.maps.Map(container, options);
-                geocoder = new kakao.maps.services.Geocoder();
-            });
+            initLayoutResizer();
+            
+            // 카카오맵 스크립트가 완전히 준비될 때까지 대기 후 초기화
+            const checkAndLoadMap = setInterval(() => {
+                if (window.kakao && window.kakao.maps) {
+                    clearInterval(checkAndLoadMap);
+                    kakao.maps.load(function() {
+                        const container = document.getElementById('map');
+                        const options = { center: new kakao.maps.LatLng(37.566826, 126.9786567), level: 7 };
+                        map = new kakao.maps.Map(container, options);
+                        geocoder = new kakao.maps.services.Geocoder();
+                    });
+                }
+            }, 100);
+            
+            // 로드 실패(타임아웃) 처리
+            setTimeout(() => {
+                clearInterval(checkAndLoadMap);
+                if(!map) alert("카카오맵 API를 불러오는데 실패했습니다. 네트워크 상태나 API 키를 확인해주세요.");
+            }, 5000);
         };
 
         function getParishColorInfo(parishName) {
@@ -517,6 +538,48 @@
                 };
                 resizer.addEventListener('mousedown', mouseDownHandler);
             });
+        }
+
+        // --- 지도 전체화면 기능 ---
+        let isMapFullscreen = false;
+        let savedMapWidth = "65%";
+
+        function toggleMapFullscreen() {
+            const header = document.querySelector('header');
+            const rightPanel = document.getElementById('rightPanel');
+            const resizer = document.getElementById('layout-resizer');
+            const mapContainer = document.getElementById('map-container');
+            const exitBtn = document.getElementById('exitFullscreenBtn');
+
+            isMapFullscreen = !isMapFullscreen;
+
+            if (isMapFullscreen) {
+                // 현재 설정된 경계선 너비 저장
+                savedMapWidth = mapContainer.style.width || "65%";
+                
+                // 패널 및 헤더 숨기기
+                header.classList.add('hidden');
+                rightPanel.classList.add('hidden');
+                resizer.classList.add('hidden');
+                
+                // 지도 최대화
+                mapContainer.style.width = "100%";
+                exitBtn.classList.remove('hidden');
+            } else {
+                // 패널 및 헤더 복구
+                header.classList.remove('hidden');
+                rightPanel.classList.remove('hidden');
+                resizer.classList.remove('hidden');
+                
+                // 지도 너비 복구
+                mapContainer.style.width = savedMapWidth;
+                exitBtn.classList.add('hidden');
+            }
+
+            // 지도 레이아웃 재계산 및 렌더링 강제 업데이트
+            setTimeout(() => {
+                if (map) map.relayout();
+            }, 50);
         }
 
         function downloadSample() {
@@ -836,6 +899,47 @@
             document.getElementById('selectedCount').innerText = '0';
             document.getElementById('selectionTags').innerHTML = '<span class="text-gray-400 px-1">없음</span>';
             populateFilters();
+        }
+
+        // --- 좌우 패널 크기 조절 기능 ---
+        function initLayoutResizer() {
+            const resizer = document.getElementById('layout-resizer');
+            const leftPanel = document.getElementById('map-container');
+            let isDragging = false;
+
+            resizer.addEventListener('mousedown', function(e) {
+                isDragging = true;
+                document.body.style.cursor = 'col-resize';
+                e.preventDefault(); // 텍스트 드래그 선택 방지
+            });
+
+            document.addEventListener('mousemove', function(e) {
+                if (!isDragging) return;
+                
+                // 마우스 위치에 따라 좌측 패널의 너비를 %로 계산
+                let newWidth = (e.clientX / window.innerWidth) * 100;
+                
+                // 양쪽 패널이 너무 좁아지지 않도록 제한 (지도 최소 20%, 패널 최소 20%)
+                if (newWidth < 20) newWidth = 20;
+                if (newWidth > 80) newWidth = 80;
+                
+                leftPanel.style.width = `${newWidth}%`;
+            });
+
+            document.addEventListener('mouseup', function() {
+                if (isDragging) {
+                    isDragging = false;
+                    document.body.style.cursor = '';
+                }
+            });
+
+            // 패널 크기가 변경될 때마다 카카오맵 레이아웃 재계산 및 중심 보정
+            const resizeObserver = new ResizeObserver(() => {
+                if (map) {
+                    map.relayout();
+                }
+            });
+            resizeObserver.observe(leftPanel);
         }
     </script>
 </body>
