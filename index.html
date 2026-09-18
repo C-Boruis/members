@@ -243,7 +243,7 @@
                         <i class="fa-solid fa-eraser"></i>
                     </button>
                     <div class="w-px h-5 bg-gray-300 mx-0.5"></div>
-                    <button id="btnZoneCenter" onclick="toggleZoneCenters()" title="구역 중심점 표시" class="px-2 py-1 rounded text-xs border bg-white hover:bg-blue-50 text-gray-700">
+                    <button id="btnZoneCenter" onclick="toggleZoneCenters()" title="구역 중심점·반경 표시 (우측에서 체크했거나 교구·구역 필터로 고른 범위만)" class="px-2 py-1 rounded text-xs border bg-white hover:bg-blue-50 text-gray-700">
                         <i class="fa-solid fa-crosshairs mr-1"></i>중심점
                     </button>
                     <button onclick="fitToVisible()" title="표시된 인원에 맞춰 지도 이동" class="px-2 py-1 rounded text-xs border bg-white hover:bg-blue-50 text-gray-700">
@@ -1191,6 +1191,8 @@
         document.getElementById('filterName').value = '';
         document.getElementById('filterNoLoc').checked = false;
         refreshZoneFilterOptions();
+        // fillSelect는 새 목록에도 있는 이전 선택을 유지하므로, 목록을 다시 채운 뒤 명시적으로 비운다
+        document.getElementById('filterZone').value = '';
         applyListFilter();
     }
 
@@ -1220,6 +1222,7 @@
         renderPersonList(filtered);
         document.getElementById('listCountLabel').innerText = `${filtered.length}명 표시 / 전체 ${allData.length}명`;
         document.getElementById('listCheckAll').checked = filtered.length > 0 && filtered.every(p => p.checked);
+        scheduleZoneCenters();      // 교구/구역 필터가 중심점 범위를 좁힌다
     }
 
     function showNoLocation() {
@@ -1297,8 +1300,7 @@
 
         renderStatsTree();
         applyListFilter();
-        updateSelectionSummary();
-        if (showZoneCenters) renderZoneCenters();
+        updateSelectionSummary();   // 중심점 갱신은 여기에서 함께 예약된다
         saveToStorage();
     }
 
@@ -1448,6 +1450,7 @@
     }
 
     function updateSelectionSummary() {
+        scheduleZoneCenters();      // 체크가 바뀌면 중심점 대상도 바뀐다
         const checked = allData.filter(p => p.checked);
         document.getElementById('selectedCount').innerText = checked.length;
         const container = document.getElementById('selectionTags');
@@ -1797,24 +1800,48 @@
     /**
      * 구역 중심점을 교구 색상의 깃발로 표시하고, 평균 반경만큼 반투명 원을 그린다.
      * 색은 그 구역 마커와 같은 색조(교구 색상 + 구역 번호 음영)를 써서 핀과 짝이 맞게 한다.
+     *
+     * 대상은 '지금 지도에 보이는 인원'이다.
+     *  - 통계 트리에서 체크된 인원만 (마커 표시 규칙과 동일)
+     *  - 우측 교구/구역 필터가 걸려 있으면 그 범위만
+     * 중심과 반경도 그 인원만으로 다시 계산하므로, 일부를 빼면 깃발이 그만큼 움직인다.
      */
     function renderZoneCenters() {
         zoneCenterOverlays.forEach(o => o.setMap(null));   // CustomOverlay와 Circle 모두 setMap(null)로 제거된다
         zoneCenterOverlays = [];
         if (!showZoneCenters || !map) return;
 
-        Object.keys(stats).sort(natCmp).forEach(parish => {
-            Object.keys(stats[parish].zones).sort(natCmp).forEach(zone => {
-                const Z = stats[parish].zones[zone];
-                if (!Z.center) return;
+        const pFilter = document.getElementById('filterParish').value;
+        const zFilter = document.getElementById('filterZone').value;
 
-                const hex = getMarkerColor(parish, zone).hex;
-                const pos = new kakao.maps.LatLng(Z.center[0], Z.center[1]);
+        const target = allData.filter(p => p.checked && p.lat != null
+            && (!pFilter || p.parish === pFilter)
+            && (!zFilter || p.zone === zFilter));
+        if (!target.length) return;
+
+        // 교구+구역으로 묶는다 (구분자는 데이터에 나올 수 없는 문자)
+        const groups = new Map();
+        target.forEach(p => {
+            const key = p.parish + ' ' + p.zone;
+            let g = groups.get(key);
+            if (!g) { g = { parish: p.parish, zone: p.zone, pts: [] }; groups.set(key, g); }
+            g.pts.push([p.lat, p.lng]);
+        });
+
+        [...groups.values()]
+            .sort((a, b) => natCmp(a.parish, b.parish) || natCmp(a.zone, b.zone))
+            .forEach(g => {
+                const n = g.pts.length;
+                const cLat = g.pts.reduce((s, q) => s + q[0], 0) / n;
+                const cLng = g.pts.reduce((s, q) => s + q[1], 0) / n;
+                const avgDist = g.pts.reduce((s, q) => s + haversine(cLat, cLng, q[0], q[1]), 0) / n;
+
+                const hex = getMarkerColor(g.parish, g.zone).hex;
+                const pos = new kakao.maps.LatLng(cLat, cLng);
 
                 // 반경 원 — 인원이 1명이라 평균 반경이 0이면 최소 크기로 보이게 한다
-                const radius = Math.max(Z.avgDist || 0, 60);
                 zoneCenterOverlays.push(new kakao.maps.Circle({
-                    map, center: pos, radius,
+                    map, center: pos, radius: Math.max(avgDist, 60),
                     strokeWeight: 2, strokeColor: hex, strokeOpacity: 0.75, strokeStyle: 'shortdash',
                     fillColor: hex, fillOpacity: 0.2, zIndex: 1
                 }));
@@ -1823,7 +1850,7 @@
                 const el = document.createElement('div');
                 el.className = 'zone-flag';
                 el.innerHTML =
-                    `<div class="zone-flag-banner" style="background:${hex}">${esc(parish)} ${esc(zone)} (${Z.total})</div>`
+                    `<div class="zone-flag-banner" style="background:${hex}">${esc(g.parish)} ${esc(g.zone)} (${n})</div>`
                     + `<div class="zone-flag-pole"></div>`
                     + `<div class="zone-flag-base"></div>`;
                 zoneCenterOverlays.push(new kakao.maps.CustomOverlay({
@@ -1831,8 +1858,10 @@
                     xAnchor: 0, yAnchor: 0, zIndex: 500
                 }));
             });
-        });
     }
+
+    /** 체크·필터가 바뀔 때마다 불리므로 한 박자 묶어서 다시 그린다. */
+    const scheduleZoneCenters = debounce(renderZoneCenters, 60);
 
     // ------------------------------- 수동 위치 지정 -------------------------------
     let pinTargetId = null;
