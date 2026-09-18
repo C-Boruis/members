@@ -41,6 +41,8 @@
 
         /* 영역 선택 / 위치 지정 모드에서 지도 커서 */
         .map-crosshair, .map-crosshair * { cursor: crosshair !important; }
+        /* 올가미 중에는 터치로 화면이 스크롤/확대되지 않게 한다 */
+        #map.lasso-active { touch-action: none; }
 
         /* 토스트 */
         #toastArea { position: fixed; bottom: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
@@ -48,10 +50,26 @@
         .toast.ok { background: #15803d; } .toast.warn { background: #b45309; } .toast.err { background: #b91c1c; }
         @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-        .zone-center-label {
-            background: rgba(255,255,255,.92); border: 1px solid #94a3b8; border-radius: 4px;
-            padding: 1px 6px; font-size: 11px; font-weight: 700; color: #334155; white-space: nowrap;
-            box-shadow: 0 1px 3px rgba(0,0,0,.2);
+        /* 구역 중심점 = 깃발. 앵커가 0x0이라 모든 부분을 중심 좌표 기준으로 절대배치한다. */
+        .zone-flag { position: relative; width: 0; height: 0; }
+        .zone-flag-pole {
+            position: absolute; left: 0; bottom: 0; width: 2px; height: 38px;
+            background: #334155; box-shadow: 0 0 2px rgba(255,255,255,.95);
+        }
+        .zone-flag-base {
+            position: absolute; left: -5px; bottom: -5px; width: 10px; height: 10px;
+            border-radius: 50%; background: #fff; border: 2px solid #334155;
+            box-shadow: 0 0 3px rgba(0,0,0,.35);
+        }
+        .zone-flag-banner {
+            position: absolute; left: 2px; bottom: 30px;
+            padding: 2px 9px; border-radius: 2px 7px 7px 2px;
+            /* 기본 표출 크기(11px)의 1.7배 */
+            font-size: 18.7px; line-height: 1.25; font-weight: 800;
+            color: #fff; white-space: nowrap;
+            border: 1px solid rgba(255,255,255,.9);
+            text-shadow: 0 1px 2px rgba(0,0,0,.45);
+            box-shadow: 0 2px 6px rgba(0,0,0,.3);
         }
 
         /* --- 반응형: 태블릿/폰에서는 상하 배치 ---
@@ -215,7 +233,7 @@
             <div id="mapToolbar" class="absolute top-3 left-3 z-[100] flex flex-col gap-2 no-print">
                 <div class="bg-white/95 backdrop-blur rounded-lg shadow-lg border p-1.5 flex flex-wrap gap-1 items-center">
                     <span class="text-[11px] font-bold text-gray-500 px-1 hidden sm:inline">영역 편성</span>
-                    <button id="btnLasso" onclick="startArea('lasso')" title="마우스로 자유롭게 감싸기 (PC)" class="px-2 py-1 rounded text-xs border bg-white hover:bg-blue-50 text-gray-700">
+                    <button id="btnLasso" onclick="startArea('lasso')" title="드래그해서 자유롭게 감싸기 (마우스·터치 모두 가능)" class="px-2 py-1 rounded text-xs border bg-white hover:bg-blue-50 text-gray-700">
                         <i class="fa-solid fa-draw-polygon mr-1"></i>올가미
                     </button>
                     <button id="btnPoly" onclick="startArea('poly')" title="지도를 탭/클릭해 꼭짓점 찍기 (모바일 가능)" class="px-2 py-1 rounded text-xs border bg-white hover:bg-blue-50 text-gray-700">
@@ -1596,13 +1614,27 @@
     let areaMode = null;                // 'lasso' | 'poly' | null
     let areaPath = [];                  // [{lat,lng}]
     let areaLine = null, areaPoly = null, areaDots = [];
-    let lassoDragging = false;
+    let lassoDragging = false, lassoPointerId = null, lassoLastPt = { x: 0, y: 0 };
 
     function initMapEvents() {
-        kakao.maps.event.addListener(map, 'mousedown', onMapMouseDown);
-        kakao.maps.event.addListener(map, 'mousemove', onMapMouseMove);
-        kakao.maps.event.addListener(map, 'mouseup', onMapMouseUp);
         kakao.maps.event.addListener(map, 'click', onMapClick);
+
+        // 카카오맵 Map 객체는 mousedown/mouseup 이벤트를 제공하지 않는다.
+        // (지원 목록: click, dblclick, rightclick, mousemove, drag 계열, idle, tilesloaded 등)
+        // 그래서 올가미는 지도 엘리먼트의 포인터 이벤트로 직접 처리한다. 터치도 함께 지원된다.
+        const el = document.getElementById('map');
+        el.addEventListener('pointerdown', onLassoDown);
+        el.addEventListener('pointermove', onLassoMove);
+        el.addEventListener('pointerup', onLassoEnd);
+        el.addEventListener('pointercancel', onLassoEnd);
+    }
+
+    /** 화면 좌표 → 지도 좌표 */
+    function screenToLatLng(clientX, clientY) {
+        const r = document.getElementById('map').getBoundingClientRect();
+        return map.getProjection().coordsFromContainerPoint(
+            new kakao.maps.Point(clientX - r.left, clientY - r.top)
+        );
     }
 
     function startArea(mode) {
@@ -1618,14 +1650,19 @@
             ? '<b>올가미</b> — 지도를 <b>드래그</b>해 감쌀 영역을 그리세요. 손을 떼면 자동으로 선택됩니다.'
             : '<b>다각형</b> — 지도를 <b>탭/클릭</b>해 꼭짓점을 3개 이상 찍고 <b>완료</b>를 누르세요.';
         document.getElementById(mode === 'lasso' ? 'btnLasso' : 'btnPoly').classList.add('bg-blue-600', 'text-white');
-        if (mode === 'lasso') { map.setDraggable(false); }
+        if (mode === 'lasso') {
+            // 드래그로 지도가 움직이거나 터치로 화면이 스크롤되지 않게 막는다
+            map.setDraggable(false);
+            map.setZoomable(false);
+            document.getElementById('map').classList.add('lasso-active');
+        }
     }
 
     function cancelArea() {
         if (!areaMode) return;
-        const m = areaMode;
-        areaMode = null; lassoDragging = false;
+        areaMode = null; lassoDragging = false; lassoPointerId = null;
         if (map) { map.setDraggable(true); map.setZoomable(true); }
+        document.getElementById('map').classList.remove('lasso-active');
         document.getElementById('map').parentElement.classList.remove('map-crosshair');
         document.getElementById('areaPanel').classList.add('hidden');
         ['btnLasso', 'btnPoly'].forEach(id => document.getElementById(id).classList.remove('bg-blue-600', 'text-white'));
@@ -1663,21 +1700,36 @@
         });
     }
 
-    function onMapMouseDown(e) {
-        if (areaMode !== 'lasso') return;
+    function onLassoDown(e) {
+        if (areaMode !== 'lasso' || !map) return;
+        if (e.pointerType === 'mouse' && e.button !== 0) return;   // 왼쪽 버튼만
+        e.preventDefault();
         lassoDragging = true;
-        areaPath = [{ lat: e.latLng.getLat(), lng: e.latLng.getLng() }];
+        lassoPointerId = e.pointerId;
+        lassoLastPt = { x: e.clientX, y: e.clientY };
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* 지원 안 하면 무시 */ }
+        const ll = screenToLatLng(e.clientX, e.clientY);
+        areaPath = [{ lat: ll.getLat(), lng: ll.getLng() }];
     }
 
-    function onMapMouseMove(e) {
-        if (areaMode !== 'lasso' || !lassoDragging) return;
-        areaPath.push({ lat: e.latLng.getLat(), lng: e.latLng.getLng() });
-        if (areaPath.length % 2 === 0) drawTempLine();
+    function onLassoMove(e) {
+        if (!lassoDragging || areaMode !== 'lasso') return;
+        if (e.pointerId !== lassoPointerId) return;
+        e.preventDefault();
+        // 4px 미만 이동은 버려 점이 과도하게 쌓이는 것을 막는다
+        if (Math.hypot(e.clientX - lassoLastPt.x, e.clientY - lassoLastPt.y) < 4) return;
+        lassoLastPt = { x: e.clientX, y: e.clientY };
+        const ll = screenToLatLng(e.clientX, e.clientY);
+        areaPath.push({ lat: ll.getLat(), lng: ll.getLng() });
+        drawTempLine();
     }
 
-    function onMapMouseUp() {
-        if (areaMode !== 'lasso' || !lassoDragging) return;
+    function onLassoEnd(e) {
+        if (!lassoDragging || areaMode !== 'lasso') return;
+        if (e.pointerId !== lassoPointerId) return;
         lassoDragging = false;
+        try { e.currentTarget.releasePointerCapture(lassoPointerId); } catch (err) { /* 무시 */ }
+        lassoPointerId = null;
         finishArea();
     }
 
@@ -1693,10 +1745,15 @@
     function finishArea() {
         if (!areaMode) return;
         const path = areaPath.slice();
-        const mode = areaMode;
-        cancelArea();
 
-        if (path.length < 3) { toast('영역이 너무 작습니다. 다시 그려주세요.', 'warn'); return; }
+        // 점이 모자라면 모드를 유지한 채 다시 그리게 둔다 (헛클릭으로 모드가 풀리지 않도록)
+        if (path.length < 3) {
+            clearTempShapes();
+            areaPath = [];
+            toast('영역이 너무 작습니다. 다시 그려주세요.', 'warn');
+            return;
+        }
+        cancelArea();
 
         if (areaPoly) areaPoly.setMap(null);
         areaPoly = new kakao.maps.Polygon({
@@ -1737,22 +1794,42 @@
         renderZoneCenters();
     }
 
+    /**
+     * 구역 중심점을 교구 색상의 깃발로 표시하고, 평균 반경만큼 반투명 원을 그린다.
+     * 색은 그 구역 마커와 같은 색조(교구 색상 + 구역 번호 음영)를 써서 핀과 짝이 맞게 한다.
+     */
     function renderZoneCenters() {
-        zoneCenterOverlays.forEach(o => o.setMap(null));
+        zoneCenterOverlays.forEach(o => o.setMap(null));   // CustomOverlay와 Circle 모두 setMap(null)로 제거된다
         zoneCenterOverlays = [];
         if (!showZoneCenters || !map) return;
-        Object.keys(stats).forEach(parish => {
-            Object.keys(stats[parish].zones).forEach(zone => {
+
+        Object.keys(stats).sort(natCmp).forEach(parish => {
+            Object.keys(stats[parish].zones).sort(natCmp).forEach(zone => {
                 const Z = stats[parish].zones[zone];
                 if (!Z.center) return;
+
+                const hex = getMarkerColor(parish, zone).hex;
+                const pos = new kakao.maps.LatLng(Z.center[0], Z.center[1]);
+
+                // 반경 원 — 인원이 1명이라 평균 반경이 0이면 최소 크기로 보이게 한다
+                const radius = Math.max(Z.avgDist || 0, 60);
+                zoneCenterOverlays.push(new kakao.maps.Circle({
+                    map, center: pos, radius,
+                    strokeWeight: 2, strokeColor: hex, strokeOpacity: 0.75, strokeStyle: 'shortdash',
+                    fillColor: hex, fillOpacity: 0.2, zIndex: 1
+                }));
+
+                // 깃발
                 const el = document.createElement('div');
-                el.className = 'zone-center-label';
-                el.innerText = `${parish} ${zone} (${Z.total})`;
-                const ov = new kakao.maps.CustomOverlay({
-                    map, position: new kakao.maps.LatLng(Z.center[0], Z.center[1]),
-                    content: el, yAnchor: 0.5, zIndex: 500
-                });
-                zoneCenterOverlays.push(ov);
+                el.className = 'zone-flag';
+                el.innerHTML =
+                    `<div class="zone-flag-banner" style="background:${hex}">${esc(parish)} ${esc(zone)} (${Z.total})</div>`
+                    + `<div class="zone-flag-pole"></div>`
+                    + `<div class="zone-flag-base"></div>`;
+                zoneCenterOverlays.push(new kakao.maps.CustomOverlay({
+                    map, position: pos, content: el,
+                    xAnchor: 0, yAnchor: 0, zIndex: 500
+                }));
             });
         });
     }
