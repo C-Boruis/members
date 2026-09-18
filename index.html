@@ -479,7 +479,7 @@
                     </label>
                     <label class="flex items-center gap-2">
                         <span class="w-12 shrink-0 text-gray-600">구역</span>
-                        <input type="number" id="setZoneCount" min="1" max="20" class="w-full border rounded px-2 py-1.5">
+                        <input type="number" id="setZoneCount" min="1" max="20" oninput="renderShadePreview()" class="w-full border rounded px-2 py-1.5">
                         <span class="text-gray-500">개</span>
                     </label>
                 </div>
@@ -733,6 +733,7 @@
 
     /** 지도가 준비된 뒤, 이미 복원된 데이터에 마커를 붙인다. */
     function onMapReady() {
+        rebuildZoneShades();
         allData.forEach(syncMarker);
         if (allData.some(p => p.lat != null)) fitToVisible();
         if (showZoneCenters) renderZoneCenters();
@@ -777,12 +778,61 @@
         return { h: Math.round(h), s: Math.round(s * 100), l: Math.round(l * 100) };
     }
 
+    // --------- 구역 농도 ---------
+    // 교구 색상을 기준으로 구역마다 명도를 다르게 준다.
+    // 예전에는 '기본명도 + (구역번호-1)*9'를 25~80으로 잘라내기만 해서, 기본명도 50인 교구는
+    // 5구역부터 전부 80으로 붙어 같은 색이 됐다. 이제는 그 교구의 구역 수에 맞춰 고르게 나눈다.
+    const SHADE_LO = 24, SHADE_HI = 78, SHADE_STEP_MAX = 11;
+    let zoneShades = {};        // { "교구\0구역": {i, n} }
+
+    /** 교구별로 구역에 농도 번호를 매긴다. 데이터나 설정이 바뀌면 다시 부른다. */
+    function rebuildZoneShades() {
+        zoneShades = {};
+        const byParish = {};
+        allData.forEach(p => {
+            (byParish[p.parish] || (byParish[p.parish] = new Set())).add(p.zone);
+        });
+
+        Object.keys(byParish).forEach(parish => {
+            const numbered = [], named = [];
+            byParish[parish].forEach(z => {
+                const m = S(z).match(/\d+/);
+                if (m) numbered.push({ z, num: parseInt(m[0], 10) }); else named.push(z);
+            });
+            numbered.sort((a, b) => a.num - b.num);
+            named.sort((a, b) => a.localeCompare(b, 'ko'));
+
+            // 슬롯 수는 '그 교구에 실제로 있는 구역 수'로 잡는다.
+            // 설정의 구역 수나 구역 번호를 그대로 쓰면, 구역 수를 20으로 잡아두고 3개만 쓰는 교구나
+            // 번호가 18·19·20처럼 몰린 교구에서 색이 다시 뭉쳐 버린다.
+            const order = [...numbered.map(o => o.z), ...named];
+            const n = Math.max(2, order.length);
+            order.forEach((z, k) => { zoneShades[parish + ' ' + z] = { i: k, n }; });
+        });
+    }
+
     function getMarkerColor(parish, zone) {
         const base = getParishColorInfo(parish);
-        const m = S(zone).match(/\d+/);
-        const zNum = m ? parseInt(m[0], 10) : 1;
-        const lightness = Math.max(25, Math.min(80, base.l + (zNum - 1) * 9));
-        return { hex: hslToHex(base.h, base.s, lightness), baseHex: hslToHex(base.h, base.s, base.l) };
+        const slot = zoneShades[S(parish) + ' ' + S(zone)];
+        const n = slot ? slot.n : 2;
+        const i = slot ? slot.i : 0;
+
+        // 교구 기본 명도를 한가운데 두고, 구역 수만큼 위아래로 고르게 펼친다
+        const step = Math.min(SHADE_STEP_MAX, (SHADE_HI - SHADE_LO) / Math.max(1, n - 1));
+        const span = step * (n - 1);
+        let start = base.l - span / 2;
+        if (start + span > SHADE_HI) start = SHADE_HI - span;
+        if (start < SHADE_LO) start = SHADE_LO;
+
+        const l = Math.max(SHADE_LO, Math.min(SHADE_HI, start + step * i));
+        // 어두운 쪽은 채도를 조금 올려 흐려 보이지 않게 한다
+        const s = Math.max(30, Math.min(100, base.s * (1 + (base.l - l) / 140)));
+
+        return {
+            hex: hslToHex(base.h, s, l),                                  // 지도 마커 · 구역 농도
+            baseHex: hslToHex(base.h, base.s, base.l),                    // 교구 대표색
+            textHex: hslToHex(base.h, s, Math.min(l, 42))                 // 명단 배지 글자용(읽히도록 어둡게)
+        };
     }
 
     function hslToHex(h, s, l) {
@@ -1122,6 +1172,7 @@
             setProgress(1, 1);
         }
 
+        rebuildZoneShades();
         allData.forEach(syncMarker);
         sortDataDefault();
 
@@ -1261,6 +1312,7 @@
 
     // ------------------------------- 통계 -------------------------------
     function updateStatsAndUI() {
+        rebuildZoneShades();
         stats = {};
         allData.forEach(p => {
             const P = stats[p.parish] || (stats[p.parish] = { total: 0, zones: {} });
@@ -1370,7 +1422,8 @@
                     zoneDiv.innerHTML = `
                         <div class="flex items-center gap-2 mb-1 min-w-0">
                             <input type="checkbox" ${isZoneChecked ? 'checked' : ''} ${zEmpty ? 'disabled' : ''} data-level="zone" data-parish="${esc(parish)}" data-zone="${esc(zone)}" class="rounded text-blue-600 focus:ring-0 disabled:opacity-30">
-                            <span class="font-semibold ${zEmpty ? 'text-gray-400' : 'text-gray-700'} text-xs truncate">└ ${esc(zone)}</span>
+                            <span class="w-2.5 h-2.5 rounded-full shrink-0 border border-white shadow-sm" style="background-color:${getMarkerColor(parish, zone).hex}"></span>
+                            <span class="font-semibold ${zEmpty ? 'text-gray-400' : 'text-gray-700'} text-xs truncate">${esc(zone)}</span>
                             <span class="text-[10px] text-gray-400 shrink-0">${zEmpty ? '(비어 있음)' : `(${zData.total}명${zData.avgDist != null ? ' · 평균 ' + fmtDist(zData.avgDist) : ''})`}</span>
                             <button data-act="focus-zone" data-parish="${esc(parish)}" data-zone="${esc(zone)}" class="ml-auto text-gray-300 hover:text-blue-600 shrink-0" title="이 구역으로 지도 이동"><i class="fa-solid fa-magnifying-glass-location text-xs"></i></button>
                         </div>
@@ -1482,8 +1535,9 @@
             tr.id = `row-${p.id}`;
             tr.className = `border-b list-row ${p.lat == null ? 'no-marker-row' : ''}`;
 
-            const hex = getMarkerColor(p.parish, p.zone).baseHex;
-            const badge = `background-color:${hex}1A;color:${hex};border:1px solid ${hex}40;`;
+            // 배지도 구역 농도를 따라가야 명단과 지도가 같은 색으로 읽힌다 (글자는 어둡게 고정)
+            const c = getMarkerColor(p.parish, p.zone);
+            const badge = `background-color:${c.hex}26;color:${c.textHex};border:1px solid ${c.hex}80;`;
             const addrCell = p.address
                 ? esc(p.address) + (p.lat == null ? ' <i class="fa-solid fa-triangle-exclamation text-red-400" title="위치 미확인"></i>' : '')
                 : '<span class="text-red-400">주소 없음</span>';
@@ -1932,6 +1986,7 @@
             checked: r.checked !== false
         }));
         nextId = allData.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+        rebuildZoneShades();
         allData.forEach(syncMarker);
         populateFilters();
         updateStatsAndUI();
@@ -2029,6 +2084,7 @@
             }
         }
 
+        rebuildZoneShades();
         syncMarker(p);
         closeEditModal();
         populateFilters();
@@ -2074,8 +2130,9 @@
             if (useG) p.group = vG;
             if (useR) p.role = vR;
             if (useA) p.attendance = vA;
-            syncMarker(p);
         });
+        rebuildZoneShades();                 // 새 교구/구역이 생겼을 수 있으므로 농도부터 다시 잡는다
+        targets.forEach(syncMarker);
 
         closeBulkModal();
         populateFilters();
@@ -2176,8 +2233,38 @@
             row.className = 'flex items-center gap-2 border rounded px-2 py-1.5 bg-gray-50 cursor-pointer';
             row.innerHTML = `<input type="color" value="${hex}" data-parish="${esc(name)}" class="w-8 h-7 border rounded cursor-pointer bg-white shrink-0">
                 <span class="text-sm text-gray-700 truncate">${esc(name)}</span>
-                <span class="ml-auto text-[10px] text-gray-400 shrink-0">${allData.filter(p => p.parish === name).length}명</span>`;
+                <span class="ml-auto flex gap-px shrink-0" data-shades="${esc(name)}"></span>`;
             box.appendChild(row);
+            row.querySelector('input[type="color"]').addEventListener('input', renderShadePreview);
+        });
+        renderShadePreview();
+    }
+
+    /** 교구 색상 옆에 구역별 농도가 어떻게 나뉘는지 미리 보여준다. */
+    function renderShadePreview() {
+        const count = clampInt(document.getElementById('setZoneCount').value, 1, 20, settings.zoneCount);
+        document.querySelectorAll('#setColorRows [data-shades]').forEach(box => {
+            const input = box.closest('label').querySelector('input[type="color"]');
+            const b = hexToHsl(input.value);
+            // 명단에 이미 구역이 있으면 그 개수대로, 없으면 설정값으로 미리 보여준다
+            const actual = new Set(allData.filter(p => p.parish === box.dataset.shades).map(p => p.zone)).size;
+            const n = Math.max(2, actual || count);
+            const step = Math.min(SHADE_STEP_MAX, (SHADE_HI - SHADE_LO) / Math.max(1, n - 1));
+            const span = step * (n - 1);
+            let start = b.l - span / 2;
+            if (start + span > SHADE_HI) start = SHADE_HI - span;
+            if (start < SHADE_LO) start = SHADE_LO;
+
+            box.innerHTML = '';
+            for (let i = 0; i < Math.min(n, 10); i++) {
+                const l = Math.max(SHADE_LO, Math.min(SHADE_HI, start + step * i));
+                const s = Math.max(30, Math.min(100, b.s * (1 + (b.l - l) / 140)));
+                const sw = document.createElement('span');
+                sw.className = 'w-2 h-4 first:rounded-l last:rounded-r';
+                sw.style.backgroundColor = hslToHex(b.h, s, l);
+                sw.title = `${i + 1}구역`;
+                box.appendChild(sw);
+            }
         });
     }
 
@@ -2212,6 +2299,7 @@
     function applySettings() {
         applyPrintPageStyle();
         dynamicColors = {};
+        rebuildZoneShades();            // 구역 수·색상이 바뀌면 농도 배분도 달라진다
         allData.forEach(syncMarker);
         populateFilters();
         updateStatsAndUI();
