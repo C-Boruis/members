@@ -54,8 +54,11 @@
             box-shadow: 0 1px 3px rgba(0,0,0,.2);
         }
 
-        /* --- 반응형: 태블릿/폰에서는 상하 배치 --- */
-        @media (max-width: 767px) {
+        /* --- 반응형: 태블릿/폰에서는 상하 배치 ---
+           screen으로 한정할 것. A4 세로 본문 폭(200mm ≈ 756px)이 767px보다 좁아서
+           screen을 빼면 인쇄에도 적용되고, 가로(287mm ≈ 1085px)에서는 적용되지 않아
+           용지 방향에 따라 인쇄 결과가 달라진다. */
+        @media screen and (max-width: 767px) {
             main { flex-direction: column !important; }
             #map-container { width: 100% !important; height: 38vh !important; flex: none !important; border-right: none !important; border-bottom: 1px solid #d1d5db; }
             #layout-resizer { display: none !important; }
@@ -72,11 +75,18 @@
         /* 인쇄 준비 중에는 지도를 A4 세로 비율로 만들어 타일을 미리 받아둔다 */
         @media screen {
             .printing #rightPanel, .printing #layout-resizer, .printing #mapToolbar { display: none !important; }
+            /* #map-container는 main의 flex 아이템이라 flex-shrink가 인라인 너비를 조용히 깎는다.
+               (가로 방향에서 특히 치명적 — style.width는 그대로인데 실제 폭만 줄어든다) */
+            .printing #map-container { flex: 0 0 auto !important; max-width: none !important; align-self: flex-start !important; }
+            .printing main { overflow: hidden !important; }
         }
 
         @media print {
-            @page { size: A4 portrait; margin: 10mm; }
-            body, html { height: auto !important; overflow: visible !important; background: white !important; }
+            /* @page(용지 방향·여백)와 #map의 높이는 #printPageStyle에서 설정값에 따라 주입한다 */
+            body, html {
+                height: auto !important; overflow: visible !important;
+                background: white !important; display: block !important;
+            }
             header, .no-print, .resizer, #statsSection, #selectionSummaryPanel, #filterSection,
             #mapToolbar, #areaPanel, #pinPanel, #toastArea, #progressBar, #exitFullscreenBtn { display: none !important; }
             #resizeTable th:first-child, #resizeTable td:first-child,
@@ -84,32 +94,61 @@
 
             main { display: block !important; height: auto !important; overflow: visible !important; }
 
-            /* 1쪽: 지도 — 인쇄 여백 제외 폭 190mm에 맞춘 190 x 250mm 고정 (화면에서 잡아둔 비율과 동일) */
+            /* 1쪽: 지도 — 용지를 가득 채운다. 제목은 흐름에서 빼 지도 위에 얹으므로
+               컨테이너 높이 = 지도 높이가 되어 정확히 한 페이지에 들어맞는다.
+               width/height(mm)는 용지 방향에 따라 #printPageStyle에서 주입한다. */
             #map-container {
                 display: block !important; position: relative !important;
-                width: 100% !important; height: auto !important;
-                page-break-after: always !important; border: none !important; margin: 0 !important;
+                overflow: hidden !important;
+                page-break-after: always !important; break-after: page !important;
+                border: none !important; margin: 0 !important; padding: 0 !important;
             }
-            #printMapTitle { display: block !important; text-align: center; margin-bottom: 4mm; }
-            #map { width: 100% !important; height: 250mm !important; border: 1.5px solid #000 !important; }
+            #map { width: 100% !important; height: 100% !important; border: 1px solid #000 !important; }
+            /* #printMapTitle이 DOM상 #map보다 앞이라 z-index 없이는 지도에 가려진다 */
+            #printMapTitle {
+                display: block !important;
+                position: absolute !important; top: 5mm !important; left: 5mm !important;
+                z-index: 200 !important; max-width: 62% !important;
+                text-align: left !important; margin: 0 !important; padding: 2.5mm 4mm !important;
+                background: rgba(255, 255, 255, 0.93) !important;
+                border: 1px solid #111827 !important; border-radius: 1.5mm !important;
+                -webkit-print-color-adjust: exact; print-color-adjust: exact;
+            }
 
-            /* 2쪽부터: 명단 */
+            /* 2쪽부터: 명단. @page 여백이 5mm라 표가 용지 끝에 붙지 않도록 패딩으로 보완 */
             #rightPanel, #listContainer {
                 width: 100% !important; height: auto !important; border: none !important;
                 box-shadow: none !important; display: block !important; overflow: visible !important;
                 min-height: 0 !important; max-height: none !important;
             }
+            #rightPanel { padding: 7mm 5mm !important; }
             #listContainer > div:last-child { overflow: visible !important; height: auto !important; }
-            table { width: 100% !important; border-collapse: collapse !important; font-size: 10.5pt !important; table-layout: auto !important; }
-            thead { display: table-header-group !important; }
+            table { width: 100% !important; min-width: 0 !important; border-collapse: collapse !important; font-size: 10.5pt !important; table-layout: fixed !important; }
+            thead { display: table-header-group !important; position: static !important; top: auto !important; z-index: auto !important; box-shadow: none !important; }
             tbody { display: table-row-group !important; }
             tr { page-break-inside: avoid; }
-            th, td { border: 1px solid #000 !important; padding: 5px !important; color: #000 !important; white-space: normal !important; }
+            /* 화면용 말줄임(th/td의 overflow:hidden, td의 truncate 클래스)을 풀어야
+               인쇄물에서 긴 주소가 잘리지 않는다. 한글은 keep-all + anywhere 조합이 적절하다. */
+            th, td {
+                border: 1px solid #000 !important; padding: 5px !important; color: #000 !important;
+                white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
+                word-break: keep-all !important; overflow-wrap: anywhere !important; vertical-align: top !important;
+            }
             th { background: #f1f5f9 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            #printTitle { display: block !important; text-align: center; margin-bottom: 16px; }
+            /* adjustColumnWidths()가 박아둔 화면 기준 px 폭을 무시하고 인쇄용 비율로 고정.
+               첫/마지막 열은 display:none이므로 아래 5개가 100%를 이룬다. */
+            #resizeTable th[data-col="parish_zone"] { width: 22% !important; }
+            #resizeTable th[data-col="name"]        { width: 12% !important; }
+            #resizeTable th[data-col="role"]        { width: 12% !important; }
+            #resizeTable th[data-col="address"]     { width: 46% !important; }
+            #resizeTable th[data-sort="attendance"] { width: 8%  !important; }
+            #printTitle { display: block !important; text-align: center; margin-bottom: 6mm; }
         }
         #printTitle, #printMapTitle { display: none; }
     </style>
+
+    <!-- 용지 방향(@page)과 지도 높이는 설정에 따라 런타임에 주입한다. applyPrintPageStyle() 참고 -->
+    <style id="printPageStyle"></style>
 </head>
 <body class="bg-gray-100 h-screen flex flex-col">
 
@@ -131,6 +170,9 @@
                 </label>
                 <button onclick="exportToExcel()" title="엑셀로 저장 (좌표 포함)" class="bg-blue-600 hover:bg-blue-700 text-white px-2.5 py-1.5 rounded text-sm transition shadow-sm">
                     <i class="fa-solid fa-floppy-disk md:mr-2"></i><span class="hidden md:inline">저장</span>
+                </button>
+                <button onclick="openMyMapsModal()" title="체크된 인원을 구글 내 지도용 KML로 내보내기" class="bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1.5 rounded text-sm transition shadow-sm">
+                    <i class="fa-solid fa-earth-asia md:mr-2"></i><span class="hidden md:inline">내 지도</span>
                 </button>
                 <button onclick="addPerson()" title="인원 추가" class="bg-teal-600 hover:bg-teal-700 text-white px-2.5 py-1.5 rounded text-sm transition shadow-sm">
                     <i class="fa-solid fa-user-plus md:mr-2"></i><span class="hidden md:inline">추가</span>
@@ -164,8 +206,8 @@
         <!-- 좌측: 지도 -->
         <div id="map-container" class="h-full relative bg-gray-100 border-r" style="width: 65%;">
             <div id="printMapTitle">
-                <div style="font-size:22px;font-weight:bold;">구역 배치도</div>
-                <div id="printMapSubtitle" style="font-size:12px;font-weight:normal;margin-top:4px;"></div>
+                <div style="font-size:16px;font-weight:bold;">구역 배치도</div>
+                <div id="printMapSubtitle" style="font-size:10px;font-weight:normal;margin-top:2px;"></div>
             </div>
             <div id="map"></div>
 
@@ -452,12 +494,59 @@
                 </div>
             </div>
 
+            <!-- 인쇄 용지 방향 -->
+            <div class="mb-2 mt-5">
+                <div class="text-sm font-bold text-gray-700 mb-2"><i class="fa-solid fa-print mr-1.5 text-blue-500"></i>인쇄 용지 방향</div>
+                <div class="grid grid-cols-2 gap-2 text-sm">
+                    <label class="flex items-start gap-2 border rounded px-2.5 py-2 cursor-pointer hover:bg-gray-50">
+                        <input type="radio" name="setPrintOrientation" value="portrait" class="mt-0.5">
+                        <span><b>세로</b><span class="block text-[11px] text-gray-500">명단이 많을 때 유리</span></span>
+                    </label>
+                    <label class="flex items-start gap-2 border rounded px-2.5 py-2 cursor-pointer hover:bg-gray-50">
+                        <input type="radio" name="setPrintOrientation" value="landscape" class="mt-0.5">
+                        <span><b>가로</b><span class="block text-[11px] text-gray-500">구역이 동서로 넓을 때 유리</span></span>
+                    </label>
+                </div>
+                <p class="text-[11px] text-gray-400 mt-1.5 leading-relaxed">인쇄 1쪽 지도가 용지를 가득 채웁니다. 인쇄 창의 용지 방향이 다르게 잡혀 있으면 여기와 같게 맞춰주세요.</p>
+            </div>
+
             <div class="mt-6 flex justify-between gap-2">
                 <button onclick="resetSettings()" class="px-3 py-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-600 rounded text-sm"><i class="fa-solid fa-rotate-left mr-1"></i>기본값</button>
                 <div class="flex gap-2">
                     <button onclick="hideModal('settingsModal')" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 text-sm">취소</button>
                     <button onclick="saveSettings()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-bold">저장</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================== 구글 내 지도 안내 모달 ===================== -->
+    <div id="myMapsModal" class="fixed inset-0 z-50 hidden items-center justify-center modal-overlay no-print p-4">
+        <div class="bg-white rounded-lg shadow-lg w-full max-w-[460px] p-5 max-h-[92vh] overflow-y-auto">
+            <h3 class="text-lg font-bold text-gray-800 mb-1 border-b pb-2"><i class="fa-solid fa-earth-asia mr-2 text-amber-600"></i>구글 내 지도로 내보내기</h3>
+            <p id="myMapsCount" class="text-xs text-gray-600 mt-2 mb-3"></p>
+
+            <ol class="text-sm text-gray-700 space-y-2 list-decimal list-inside bg-gray-50 border rounded p-3">
+                <li><b>KML 내려받기</b>를 눌러 파일을 저장합니다.</li>
+                <li><b>구글 내 지도 열기</b> → <b>새 지도 만들기</b>를 누릅니다.</li>
+                <li><b>가져오기</b>를 눌러 방금 받은 <code class="text-xs bg-white border px-1 rounded">.kml</code> 파일을 선택합니다.</li>
+                <li>교구별로 레이어가 나뉘어 들어옵니다. 색을 바꾸려면 레이어의 <b>개별 스타일 → 열 기준 스타일 지정</b>에서 교구나 구역을 고르세요.</li>
+                <li>휴대폰 <b>구글 지도 앱 → 저장됨 → 지도</b>에서 볼 수 있습니다.</li>
+            </ol>
+
+            <p class="text-[11px] text-gray-500 mt-3 leading-relaxed">
+                <i class="fa-solid fa-circle-info mr-1"></i>카카오맵·네이버지도는 즐겨찾기를 프로그램에서 한꺼번에 등록하는 기능(API)을 공개하지 않아,
+                일괄 등록이 가능한 구글 내 지도를 사용합니다. 한 지도에 레이어 10개, 한 번에 2,000명까지 가져올 수 있습니다.
+            </p>
+
+            <div class="mt-5 flex justify-end gap-2 flex-wrap">
+                <button onclick="hideModal('myMapsModal')" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 text-sm">닫기</button>
+                <button onclick="window.open('https://www.google.com/maps/d/', '_blank')" class="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 rounded text-gray-700 text-sm">
+                    <i class="fa-solid fa-arrow-up-right-from-square mr-1"></i>구글 내 지도 열기
+                </button>
+                <button onclick="exportToKml()" class="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded text-sm font-bold">
+                    <i class="fa-solid fa-download mr-1"></i>KML 내려받기
+                </button>
             </div>
         </div>
     </div>
@@ -489,7 +578,7 @@
         if (e.key === 'Escape') {
             if (areaMode) cancelArea();
             else if (pinTargetId !== null) cancelPinMode();
-            else { closeEditModal(); closeBulkModal(); hideModal('settingsModal'); }
+            else { closeEditModal(); closeBulkModal(); hideModal('settingsModal'); hideModal('myMapsModal'); }
         }
     });
 
@@ -563,7 +652,10 @@
 
     /** 사용자 설정 (설정 모달에서 변경, localStorage에 보존) */
     function defaultSettings() {
-        return { parishCount: 8, zoneCount: 5, parishColors: {}, showEmptyZones: false, markerLabel: 'zone' };
+        return {
+            parishCount: 8, zoneCount: 5, parishColors: {},
+            showEmptyZones: false, markerLabel: 'zone', printOrientation: 'portrait'
+        };
     }
     let settings = defaultSettings();
 
@@ -588,6 +680,7 @@
     // ------------------------------- 초기화 -------------------------------
     window.onload = function () {
         loadSettings();
+        applyPrintPageStyle();
         loadGeoCache();
         initTableResizer();
         initLayoutResizer();
@@ -828,6 +921,118 @@
         const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
         XLSX.writeFile(wb, `구역편성_${stamp}.xlsx`);
         toast('엑셀로 저장했습니다. (좌표 포함 — 다시 올리면 즉시 표시됩니다)', 'ok');
+    }
+
+    // ------------------------- 구글 '내 지도' KML 내보내기 -------------------------
+    // 카카오맵·네이버지도는 즐겨찾기 읽기/쓰기 API를 공개하지 않아 자동 등록이 불가능하다.
+    // 구글 내 지도는 KML 일괄 가져오기를 지원하므로 이 경로로 대신한다.
+
+    function dateStamp() {
+        const d = new Date();
+        return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    /** XML 전용 이스케이프. esc()와 달리 XML 1.0에서 금지된 제어문자까지 제거한다. */
+    const xesc = s => S(s)
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+        .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+
+    /** #RRGGBB -> KML aabbggrr (알파가 앞, R과 B가 뒤바뀐 순서) */
+    function hexToKmlColor(hex) {
+        let x = S(hex).replace('#', '');
+        if (x.length === 3) x = x.split('').map(c => c + c).join('');
+        if (!/^[0-9a-fA-F]{6}$/.test(x)) x = '3b82f6';
+        return ('ff' + x.slice(4, 6) + x.slice(2, 4) + x.slice(0, 2)).toLowerCase();
+    }
+
+    function downloadTextFile(text, filename, mime) {
+        const url = URL.createObjectURL(new Blob([text], { type: mime }));
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 0);
+    }
+
+    function kmlPlacemark(p, styleId) {
+        const fields = [
+            ['교구', p.parish], ['구역', p.zone], ['소속', p.group],
+            ['직분', p.role], ['출석', p.attendance], ['주소', p.address]
+        ];
+        const data = fields.map(([k, v]) => `      <Data name="${xesc(k)}"><value>${xesc(v)}</value></Data>`).join('\n');
+        // KML 좌표는 '경도,위도,고도' 순서다. 앱의 {lat,lng}와 반대이므로 주의.
+        return `    <Placemark>\n`
+            + `      <name>${xesc(p.name)}</name>\n`
+            + `      <styleUrl>#${styleId}</styleUrl>\n`
+            + `      <description>${xesc(`${p.parish} ${p.zone} · ${p.group} · ${p.role}`)}</description>\n`
+            + `      <ExtendedData>\n${data}\n      </ExtendedData>\n`
+            + `      <Point><coordinates>${p.lng.toFixed(6)},${p.lat.toFixed(6)},0</coordinates></Point>\n`
+            + `    </Placemark>`;
+    }
+
+    function buildKml(list) {
+        // 색상(교구+구역 음영)별로 스타일을 하나씩. id는 ASCII로 둬야 안전하다.
+        const styleIds = new Map();
+        let styles = '';
+        list.forEach(p => {
+            const hex = getMarkerColor(p.parish, p.zone).hex;
+            if (styleIds.has(hex)) return;
+            const id = 's' + styleIds.size;
+            styleIds.set(hex, id);
+            styles += `  <Style id="${id}"><IconStyle><color>${hexToKmlColor(hex)}</color><scale>1.1</scale>`
+                + `<Icon><href>http://maps.google.com/mapfiles/kml/paddle/wht-blank.png</href></Icon>`
+                + `</IconStyle></Style>\n`;
+        });
+        const sid = p => styleIds.get(getMarkerColor(p.parish, p.zone).hex);
+
+        // 내 지도는 KML의 최상위 Folder 하나를 레이어 하나로 만든다. 레이어는 지도당 10개까지.
+        const parishes = [...new Set(list.map(p => p.parish))].sort(natCmp);
+        let body;
+        if (parishes.length <= 10) {
+            body = parishes.map(name => {
+                const members = list.filter(p => p.parish === name)
+                    .sort((a, b) => compareBy('parish_zone', a, b));
+                return `  <Folder>\n    <name>${xesc(`${name} (${members.length}명)`)}</name>\n`
+                    + members.map(p => kmlPlacemark(p, sid(p))).join('\n') + `\n  </Folder>`;
+            }).join('\n');
+        } else {
+            const members = list.slice().sort((a, b) => compareBy('parish_zone', a, b));
+            body = `  <Folder>\n    <name>구역 명단 (전체 ${members.length}명)</name>\n`
+                + members.map(p => kmlPlacemark(p, sid(p))).join('\n') + `\n  </Folder>`;
+        }
+
+        const d = new Date();
+        const title = `구역편성 ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        // BOM은 붙이지 않는다. XML 선언이 이미 인코딩을 지정한다.
+        return `<?xml version="1.0" encoding="UTF-8"?>\n`
+            + `<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n`
+            + `  <name>${xesc(title)}</name>\n${styles}${body}\n</Document>\n</kml>\n`;
+    }
+
+    function exportToKml() {
+        const checked = allData.filter(p => p.checked);
+        const list = checked.filter(p => p.lat != null && p.lng != null);
+        if (!list.length) {
+            toast('내보낼 인원이 없습니다. 위치 정보가 있는 인원을 체크하세요.', 'warn');
+            return;
+        }
+        if (list.length > 2000) {
+            toast('구글 내 지도는 한 번에 2,000명까지만 가져올 수 있습니다. 교구별로 나눠 내보내세요.', 'err');
+            return;
+        }
+        downloadTextFile(buildKml(list), `구역편성_${dateStamp()}.kml`, 'application/vnd.google-earth.kml+xml');
+
+        const skipped = checked.length - list.length;
+        toast(`${list.length}명을 KML로 내보냈습니다.` + (skipped ? ` (위치 없는 ${skipped}명 제외)` : ''), 'ok');
+    }
+
+    function openMyMapsModal() {
+        const checked = allData.filter(p => p.checked);
+        const located = checked.filter(p => p.lat != null && p.lng != null).length;
+        document.getElementById('myMapsCount').innerHTML =
+            `체크된 <b>${checked.length}명</b> 중 위치가 있는 <b class="text-amber-700">${located}명</b>을 내보냅니다.`
+            + (checked.length - located ? ` <span class="text-red-500">(위치 없는 ${checked.length - located}명 제외)</span>` : '');
+        showModal('myMapsModal');
     }
 
     function handleFileUpload(event) {
@@ -1847,6 +2052,7 @@
         document.getElementById('setZoneCount').value = settings.zoneCount;
         document.getElementById('setShowEmpty').checked = settings.showEmptyZones;
         document.getElementsByName('setMarkerLabel').forEach(r => r.checked = (r.value === settings.markerLabel));
+        document.getElementsByName('setPrintOrientation').forEach(r => r.checked = (r.value === printOrientation()));
         renderColorRows();
         showModal('settingsModal');
     }
@@ -1875,6 +2081,8 @@
         settings.showEmptyZones = document.getElementById('setShowEmpty').checked;
         const picked = [...document.getElementsByName('setMarkerLabel')].find(r => r.checked);
         settings.markerLabel = picked ? picked.value : 'zone';
+        const ori = [...document.getElementsByName('setPrintOrientation')].find(r => r.checked);
+        settings.printOrientation = ori ? ori.value : 'portrait';
         settings.parishColors = {};
         document.querySelectorAll('#setColorRows input[type="color"]').forEach(i => {
             settings.parishColors[i.dataset.parish] = i.value;
@@ -1894,8 +2102,9 @@
         toast('기본값으로 되돌렸습니다.', 'ok');
     }
 
-    /** 색상·마커 표시·편성 규모 변경을 화면 전체에 반영 */
+    /** 색상·마커 표시·편성 규모·용지 방향 변경을 화면 전체에 반영 */
     function applySettings() {
+        applyPrintPageStyle();
         dynamicColors = {};
         allData.forEach(syncMarker);
         populateFilters();
@@ -1905,44 +2114,89 @@
     // ------------------------------- 인쇄 -------------------------------
     const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-    // 인쇄 여백을 뺀 A4 세로 용지의 지도 영역 비율 (190mm x 250mm)
-    const A4_MAP_RATIO = 190 / 250;
+    // 인쇄 여백 5mm를 뺀 용지 안쪽 지도 영역(mm).
+    // 높이를 1mm 남긴 것은 반올림 때문에 빈 페이지가 끼는 것을 막기 위함.
+    const PRINT_MAP_MM = {
+        portrait: { w: 200, h: 286 },    // A4 210 x 297
+        landscape: { w: 287, h: 199 }    // A4 297 x 210
+    };
+    const MM_TO_PX = 96 / 25.4;          // 인쇄 레이아웃 기준 1mm = 3.7795 CSS px
+
+    function printOrientation() { return settings.printOrientation === 'landscape' ? 'landscape' : 'portrait'; }
+    function printMapBox() { return PRINT_MAP_MM[printOrientation()]; }
+
+    /**
+     * 용지 방향과 지도 크기를 인쇄 CSS에 주입한다.
+     * @page는 클래스로 토글할 수 없어 전용 <style>의 내용을 통째로 갈아끼운다.
+     * 인쇄 미리보기가 열린 뒤에 바꾸면 반영되지 않으므로 window.print() 이전에 호출해야 한다.
+     */
+    function applyPrintPageStyle() {
+        const ori = printOrientation();
+        const b = PRINT_MAP_MM[ori];
+        document.getElementById('printPageStyle').textContent =
+            `@page { size: A4 ${ori}; margin: 5mm; }\n` +
+            `@media print { #map-container { width: ${b.w}mm !important; height: ${b.h}mm !important; } }`;
+    }
+
+    /** 카카오맵 타일 로딩을 기다린다. tilesloaded가 오지 않으면 ms 후 그냥 진행. */
+    function waitForTiles(ms) {
+        return new Promise(resolve => {
+            if (!map) return resolve();
+            let done = false;
+            const finish = () => { if (!done) { done = true; resolve(); } };
+            const handler = () => {
+                kakao.maps.event.removeListener(map, 'tilesloaded', handler);
+                setTimeout(finish, 150);          // 마커 이미지 디코딩 여유
+            };
+            kakao.maps.event.addListener(map, 'tilesloaded', handler);
+            setTimeout(finish, ms);
+        });
+    }
 
     /**
      * 체크된 인원만 인쇄한다.
-     * 1쪽 = 체크된 인원이 모두 들어오도록 축소/확대한 지도, 2쪽부터 = 명단.
-     * 인쇄 CSS에서 지도 크기가 바뀌면 카카오맵이 타일을 다시 받지 못하므로,
-     * 미리 화면상의 지도를 A4 비율로 맞춰 타일을 받아둔 뒤 인쇄한다.
+     * 1쪽 = 체크된 인원이 모두 들어오도록 맞춘 지도(용지 가득), 2쪽부터 = 명단.
+     *
+     * 핵심: 카카오맵은 인쇄 레이아웃에서 타일을 다시 받지 않는다. 인쇄 CSS가 지도를 축소하는 게
+     * 아니라 '재배치'하므로, 화면상의 지도를 인쇄될 픽셀 크기와 똑같이 미리 잡아둬야 한다.
+     * 더 작으면 인쇄물에 흰 띠가 생기고, 더 크면 왼쪽 위 일부만 잘려 나온다.
      */
     async function printReport() {
         const checked = allData.filter(p => p.checked);
         if (!checked.length) { toast('체크된 인원이 없습니다. 인쇄할 인원을 선택하세요.', 'warn'); return; }
 
+        applyPrintPageStyle();
+
         const mc = document.getElementById('map-container');
         const prevW = mc.style.width, prevH = mc.style.height;
+        const prevFlex = mc.style.flex, prevAlign = mc.style.alignSelf;
 
         // 명단은 체크된 인원만, 교구/구역 순으로
         renderPersonList(checked.slice().sort((a, b) => compareBy('parish_zone', a, b)));
         updatePrintSubtitle();
 
         document.body.classList.add('printing');
-        const h = Math.max(560, window.innerHeight - 40);
-        mc.style.height = h + 'px';
-        mc.style.width = Math.round(h * A4_MAP_RATIO) + 'px';
+
+        const box = printMapBox();
+        mc.style.flex = '0 0 auto';               // flex-shrink가 폭을 깎지 못하게
+        mc.style.alignSelf = 'flex-start';
+        mc.style.width = Math.round(box.w * MM_TO_PX) + 'px';
+        mc.style.height = Math.round(box.h * MM_TO_PX) + 'px';
 
         setStatus('인쇄 준비 중...');
         relayoutMap();
         await sleep(150);
 
         const located = checked.filter(p => p.lat != null);
-        if (located.length) fitToPeople(located, 45);
-        await sleep(950);                       // 지도 타일 로딩 대기
+        if (located.length) fitToPeople(located, 30);
+        await waitForTiles(3000);
 
         window.print();
 
         // 원상 복구
         document.body.classList.remove('printing');
         mc.style.width = prevW; mc.style.height = prevH;
+        mc.style.flex = prevFlex; mc.style.alignSelf = prevAlign;
         relayoutMap();
         applyListFilter();
         setStatus('준비됨');
@@ -2029,6 +2283,7 @@
     // Ctrl+P 등으로 직접 인쇄할 때도 명단은 체크된 인원으로 맞춘다 (지도 맞춤은 인쇄 버튼에서만 가능)
     window.addEventListener('beforeprint', () => {
         if (!document.body.classList.contains('printing')) {
+            applyPrintPageStyle();
             const checked = allData.filter(p => p.checked);
             if (checked.length) renderPersonList(checked.slice().sort((a, b) => compareBy('parish_zone', a, b)));
         }
